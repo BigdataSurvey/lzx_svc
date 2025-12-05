@@ -1,76 +1,87 @@
-from contextlib import asynccontextmanager
-from app.infra.ssh_tunnel import close_all_tunnels
+"""
+@author: lzx
+@contact: bigdata_lzx@163.com
+@time: 2025/11/28 下午6:21
+@desc: FastAPI 服务入口模块，供 uvicorn 加载 app 实例。
+"""
+# ============================================================
+# [Fix] 屏蔽 Paramiko < 3.0 产生的 CryptographyDeprecationWarning
+# 必须放在任何 import app 之前执行，否则拦截无效
+import warnings
 
+try:
+    from cryptography.utils import CryptographyDeprecationWarning
+
+    warnings.filterwarnings("ignore", category=CryptographyDeprecationWarning)
+except ImportError:
+    pass
+# ============================================================
+
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from loguru import logger
+
 from app.core.config import settings
 from app.core.exceptions import BizException, ErrorCode
 from app.core.logging import configure_logging, log_startup_banner
 from app.core.responses import fail
+from app.core.middlewares import RequestLogMiddleware
 from app.api import api_router
 
-"""
-@author: lzx
-@contact: bigdata_lzx@163.com
-@time: 2025/11/28 下午6:21
-@desc: 构建 FastAPI 应用实例，配置生命周期、中间件、异常处理及路由注册。
-"""
+# Infra 资源释放 hook
+from app.infra.ssh_tunnel import close_all_tunnels
+from app.infra.mysql import close_mysql
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """
+    应用生命周期管理：启动初始化 -> 运行 -> 关闭清理
+    """
+    # 1. 启动阶段
     configure_logging()
     log_startup_banner()
     logger.info("应用启动中...")
     logger.info(f"App starting... env={settings.env.value}")
 
-    try:
-        yield
-    finally:
-        # 应用关闭前关掉所有 SSH 隧道
-        close_all_tunnels()
-        logger.info("应用关闭中...")
-        logger.info("App shutting down...")
+    yield
+
+    # 2. 关闭阶段
+    logger.info("应用关闭中...")
+
+    # 显式关闭数据库连接池
+    await close_mysql()
+
+    # 关闭所有 SSH 隧道
+    close_all_tunnels()
+
+    logger.info("App shutting down... Bye!")
 
 
 def create_app() -> FastAPI:
-    # ✅ 先创建 FastAPI 实例
     app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
-    # CORS 配置
+    # 1. 注册全局中间件 (注意顺序：先注册的后执行，RequestLog 最好在外层)
+    app.add_middleware(RequestLogMiddleware)
+
+    # 2. CORS 配置 (从 settings 读取)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=settings.backend_cors_origins,
+        allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
 
-    # 简单请求日志中间件
-    @app.middleware("http")
-    async def log_requests(request: Request, call_next):
-        # 忽略某些探测类请求
-        if request.url.path.startswith("/.well-known"):
-            return await call_next(request)
-
-        logger.info(f"{request.method} {request.url.path}")
-        response = await call_next(request)
-        return response
-
-    # ===== 全局异常处理 =====
-
+    # 3. 全局异常处理
     @app.exception_handler(BizException)
     async def biz_exception_handler(request: Request, exc: BizException):
-        """
-        业务主动抛出的异常：
-            raise BizException(10001, "xxx 不存在")
-        """
         logger.warning(
             f"BizException path={request.url.path} code={exc.code} msg={exc.msg}"
         )
-        # HTTP 200 + 业务 code
         return JSONResponse(
             status_code=200,
             content=fail(code=int(exc.code), msg=exc.msg, data=exc.data).model_dump(),
@@ -78,9 +89,6 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(RequestValidationError)
     async def validation_exception_handler(request: Request, exc: RequestValidationError):
-        """
-        请求参数校验失败（FastAPI 自动抛的）
-        """
         logger.warning(
             f"ValidationError path={request.url.path} errors={exc.errors()}"
         )
@@ -117,11 +125,17 @@ def create_app() -> FastAPI:
             ).model_dump(),
         )
 
-    # ===== 注册路由（这里只保留一处）=====
+    # 4. 注册路由
     app.include_router(api_router, prefix=settings.api_prefix)
+
     return app
 
 
-
-# ✅ 入口：给 uvicorn 用的 app 实例
+# 入口实例
 app = create_app()
+
+if __name__ == "__main__":
+    import uvicorn
+
+    # 生产环境建议直接使用 uvicorn 命令启动，这里仅作为开发调试入口
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
