@@ -1,9 +1,7 @@
 # encoding: utf-8
 
 from typing import Any
-
 from fastapi import Depends
-
 from app.core.config import Settings, get_settings
 from app.infra.mysql import get_db as get_db  # 直接复用原来的 get_db 依赖
 import app.infra.redis_client as redis_client

@@ -32,7 +32,7 @@ def get_tunneled_url(original_url: str) -> str:
       3）返回一个新的 URL：host=127.0.0.1, port=local_bind_port，
          其他（user/password/db/query）保持不变。
     """
-    logger.info(f"[ssh_tunnel] input url={original_url!r}, enabled={_ssh_enabled()}")
+    ## logger.info(f"[ssh_tunnel] input url={original_url!r}, enabled={_ssh_enabled()}")
 
     if not original_url:
         return original_url
@@ -54,10 +54,10 @@ def get_tunneled_url(original_url: str) -> str:
 
     if forwarder is None or not forwarder.is_active:
         cfg = settings.ssh_tunnel
-        logger.info(
-            f"[ssh_tunnel] creating SSH tunnel: ssh={cfg.ssh_username}@{cfg.ssh_host}:{cfg.ssh_port} "
-            f"remote_bind={remote_host}:{remote_port}"
-        )
+        # logger.info(
+        #     f"[ssh_tunnel] creating SSH tunnel: ssh={cfg.ssh_username}@{cfg.ssh_host}:{cfg.ssh_port} "
+        #     f"remote_bind={remote_host}:{remote_port}"
+        # )
         forwarder = SSHTunnelForwarder(
             (cfg.ssh_host, cfg.ssh_port),
             ssh_username=cfg.ssh_username,
@@ -68,10 +68,10 @@ def get_tunneled_url(original_url: str) -> str:
         forwarder.start()
         _TUNNELS[key] = forwarder
 
-        logger.info(
-            f"[ssh_tunnel] SSH tunnel created: 127.0.0.1:{forwarder.local_bind_port} -> "
-            f"{remote_host}:{remote_port}"
-        )
+        # logger.info(
+        #     f"[ssh_tunnel] SSH tunnel created: 127.0.0.1:{forwarder.local_bind_port} -> "
+        #     f"{remote_host}:{remote_port}"
+        # )
 
     # 构造新的 URL（host 替换为 127.0.0.1，port 替换为本地端口）
     new_url = URL.create(
@@ -90,7 +90,7 @@ def get_tunneled_url(original_url: str) -> str:
     full_url = new_url.render_as_string(hide_password=False)
 
     # 日志里用脱敏版本
-    logger.info(f"[ssh_tunnel] output url={str(new_url)!r}")
+    # logger.info(f"[ssh_tunnel] output url={str(new_url)!r}")
 
     return full_url
 
