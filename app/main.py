@@ -8,10 +8,8 @@
 # [Fix] 屏蔽 Paramiko < 3.0 产生的 CryptographyDeprecationWarning
 # 必须放在任何 import app 之前执行，否则拦截无效
 import warnings
-
 try:
     from cryptography.utils import CryptographyDeprecationWarning
-
     warnings.filterwarnings("ignore", category=CryptographyDeprecationWarning)
 except ImportError:
     pass
@@ -31,9 +29,13 @@ from app.core.responses import fail
 from app.core.middlewares import RequestLogMiddleware
 from app.api import api_router
 
-# Infra 资源释放 hook
+# 引入所有基础设施的资源释放钩子
 from app.infra.ssh_tunnel import close_all_tunnels
 from app.infra.mysql import close_mysql
+from app.infra.doris import close_doris
+from app.infra.redis_client import close_redis
+from app.infra.mongo_client import close_mongo
+from app.infra.es_client import close_es
 
 
 @asynccontextmanager
@@ -49,25 +51,29 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    # 2. 关闭阶段
-    logger.info("应用关闭中...")
+    # 2. 关闭阶段：统一释放所有资源
+    logger.info("应用关闭中，正在释放资源...")
 
-    # 显式关闭数据库连接池
+    # 数据库与中间件 (异步/同步混合处理)
     await close_mysql()
+    close_doris()  # Doris 使用的是同步引擎
+    await close_redis()
+    close_mongo()  # Mongo 使用的是同步客户端
+    await close_es()
 
-    # 关闭所有 SSH 隧道
+    # 最后关闭 SSH 隧道，确保所有数据包已发送
     close_all_tunnels()
 
-    logger.info("App shutting down... Bye!")
+    logger.info("App shutting down... 资源释放完毕，再见！")
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
-    # 1. 注册全局中间件 (注意顺序：先注册的后执行，RequestLog 最好在外层)
+    # 1. 注册全局中间件
     app.add_middleware(RequestLogMiddleware)
 
-    # 2. CORS 配置 (从 settings 读取)
+    # 2. CORS 配置
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.backend_cors_origins,
@@ -131,11 +137,8 @@ def create_app() -> FastAPI:
     return app
 
 
-# 入口实例
 app = create_app()
 
 if __name__ == "__main__":
     import uvicorn
-
-    # 生产环境建议直接使用 uvicorn 命令启动，这里仅作为开发调试入口
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
