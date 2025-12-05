@@ -1,0 +1,8 @@
+# 忽略 git 和环境文件
+.git
+.venv
+__pycache__
+*.pyc
+.env.local
+.idea
+logs
